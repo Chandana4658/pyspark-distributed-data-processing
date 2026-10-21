@@ -1,0 +1,12 @@
+
+order_id,customer_name,product,category,quantity,price
+101,Ravi,Laptop,Electronics,1,50000
+102,Chandana,Mouse,Electronics,2,500
+103,Sita,Chair,Furniture,3,2000
+104,Ravi,Keyboard,Electronics,1,1500
+105,,Table,Furniture,2,4000
+106,Kiran,Monitor,Electronics,2,8000
+107,Sita,Chair,Furniture,3,2000
+108,Arun,Desk,Furniture,1,6000
+109,Raju,Phone,Electronics,-1,15000
+110,Meena,Book,Stationery,5,200
