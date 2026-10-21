@@ -1,11 +1,20 @@
 
 from pathlib import Path
+import logging
 import os
 import time
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def validate_orders(orders, seen_order_ids=None):
@@ -17,9 +26,7 @@ def validate_orders(orders, seen_order_ids=None):
 
     # 1. Clean text fields
     for column in ["customer_name", "product", "category"]:
-        orders[column] = (
-            orders[column].astype("string").str.strip()
-        )
+        orders[column] = orders[column].astype("string").str.strip()
 
     # 2. Convert numeric columns
     orders["quantity"] = pd.to_numeric(
@@ -82,15 +89,18 @@ def validate_orders(orders, seen_order_ids=None):
 
 def main():
     project_dir = Path(__file__).resolve().parent
-
-    # Use orders_large.csv for benchmarking.
     input_file = project_dir / "data" / "orders_large.csv"
 
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set chunk size using the CHUNK_SIZE environment variable.
-    chunk_size = int(os.getenv("CHUNK_SIZE", "5000"))
+    # Configure chunk size through the environment
+    try:
+        chunk_size = int(os.getenv("CHUNK_SIZE", "5000"))
+    except ValueError as exc:
+        raise ValueError(
+            "CHUNK_SIZE must be a positive integer."
+        ) from exc
 
     if chunk_size <= 0:
         raise ValueError("CHUNK_SIZE must be greater than zero.")
@@ -100,15 +110,29 @@ def main():
             f"Input file not found: {input_file}"
         )
 
-    start_time = time.perf_counter()
-
     cleaned_csv = output_dir / "cleaned_orders.csv"
     rejected_csv = output_dir / "rejected_records.csv"
     parquet_file = output_dir / "cleaned_orders.parquet"
     category_file = output_dir / "category_report.csv"
     product_file = output_dir / "product_report.csv"
 
-    # Remove previous output files.
+    logger.info("Starting order-processing pipeline")
+    logger.info("Input file: %s", input_file)
+    logger.info("Chunk size: %s", chunk_size)
+
+    start_time = time.perf_counter()
+
+    input_count = 0
+    valid_count = 0
+    rejected_count = 0
+    first_chunk = True
+    parquet_writer = None
+
+    seen_order_ids = set()
+    category_parts = []
+    product_parts = []
+
+    # Remove previous output files
     for file in [
         cleaned_csv,
         rejected_csv,
@@ -119,18 +143,8 @@ def main():
         if file.exists():
             file.unlink()
 
-    seen_order_ids = set()
-    category_parts = []
-    product_parts = []
-
-    input_count = 0
-    valid_count = 0
-    rejected_count = 0
-    first_chunk = True
-    parquet_writer = None
-
     try:
-        # 1. Read and process CSV in chunks.
+        # 1. Read and process CSV in chunks
         for chunk_number, orders in enumerate(
             pd.read_csv(input_file, chunksize=chunk_size),
             start=1,
@@ -145,7 +159,7 @@ def main():
             valid_count += len(cleaned)
             rejected_count += len(rejected)
 
-            # 2. Append valid and rejected records to CSV files.
+            # 2. Append valid and rejected records to CSV files
             cleaned.to_csv(
                 cleaned_csv,
                 mode="w" if first_chunk else "a",
@@ -160,7 +174,7 @@ def main():
                 index=False,
             )
 
-            # 3. Write valid rows to a single Parquet file.
+            # 3. Write valid records to one Parquet file
             if not cleaned.empty:
                 table = pa.Table.from_pandas(
                     cleaned,
@@ -175,7 +189,7 @@ def main():
 
                 parquet_writer.write_table(table)
 
-                # 4. Aggregate reports for this chunk.
+                # 4. Aggregate category report for this chunk
                 category_parts.append(
                     cleaned.groupby("category", as_index=False)
                     .agg(
@@ -185,6 +199,7 @@ def main():
                     )
                 )
 
+                # 5. Aggregate product report for this chunk
                 product_parts.append(
                     cleaned.groupby("product", as_index=False)
                     .agg(
@@ -195,12 +210,17 @@ def main():
 
             first_chunk = False
 
-            print(
-                f"Processed chunk {chunk_number}: "
-                f"{len(orders)} input rows"
+            # Log processing progress
+            logger.info(
+                "Processed chunk %s: %s input rows, "
+                "%s valid, %s rejected",
+                chunk_number,
+                len(orders),
+                len(cleaned),
+                len(rejected),
             )
 
-        # 5. Handle an empty CSV containing headers only.
+        # 6. Handle a CSV containing headers only
         if first_chunk:
             empty_orders = pd.read_csv(input_file, nrows=0)
             cleaned, rejected = validate_orders(empty_orders)
@@ -208,7 +228,7 @@ def main():
             cleaned.to_csv(cleaned_csv, index=False)
             rejected.to_csv(rejected_csv, index=False)
 
-        # 6. Combine category reports across chunks.
+        # 7. Combine category reports across chunks
         if category_parts:
             category_report = (
                 pd.concat(category_parts, ignore_index=True)
@@ -232,7 +252,7 @@ def main():
                 ]
             )
 
-        # 7. Combine product reports across chunks.
+        # 8. Combine product reports across chunks
         if product_parts:
             product_report = (
                 pd.concat(product_parts, ignore_index=True)
@@ -254,31 +274,40 @@ def main():
                 ]
             )
 
-        # 8. Save final reports.
+        # 9. Save final reports
         category_report.to_csv(category_file, index=False)
         product_report.to_csv(product_file, index=False)
+
+    except Exception:
+        logger.exception("Pipeline failed during processing")
+        raise
 
     finally:
         if parquet_writer is not None:
             parquet_writer.close()
 
-    # 9. Print data quality and performance summary.
+    # 10. Log data quality and performance summary
     elapsed_time = time.perf_counter() - start_time
+    valid_percentage = (
+        valid_count / input_count * 100
+        if input_count
+        else 0.0
+    )
 
-    print("\n--- DATA QUALITY SUMMARY ---")
-    print(f"Input records: {input_count}")
-    print(f"Valid records: {valid_count}")
-    print(f"Rejected records: {rejected_count}")
-
-    if input_count:
-        valid_percentage = valid_count / input_count * 100
-        print(f"Valid data percentage: {valid_percentage:.2f}%")
-
-    print(f"Chunk size: {chunk_size}")
-    print(f"Execution time: {elapsed_time:.4f} seconds")
-    print(f"Output directory: {output_dir}")
-    print("\nProcessing completed successfully!")
+    logger.info("----- DATA QUALITY SUMMARY -----")
+    logger.info("Input records: %s", input_count)
+    logger.info("Valid records: %s", valid_count)
+    logger.info("Rejected records: %s", rejected_count)
+    logger.info("Valid data percentage: %.2f%%", valid_percentage)
+    logger.info("Chunk size: %s", chunk_size)
+    logger.info("Execution time: %.4f seconds", elapsed_time)
+    logger.info("Output directory: %s", output_dir)
+    logger.info("Processing completed successfully")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logger.exception("Application terminated with an error")
+        raise
