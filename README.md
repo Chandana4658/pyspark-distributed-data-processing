@@ -191,3 +191,34 @@ See `sql/01_sales_summary.sql` for queries covering:
 - Category-wise sales
 - Top 10 products by sales
 
+
+
+
+### Project Results
+
+- Processed 100,000 input order records using Pandas chunk processing.
+- Accepted 99,867 valid records and rejected 133 invalid records.
+- Generated cleaned CSV and Parquet files, plus data-quality reports.
+- Loaded 99,867 cleaned records into PostgreSQL.
+- Created SQL reports for overall sales, category-wise sales, and top 10 products.
+- Created the `category_sales_summary` PostgreSQL view.
+- Added 12 automated tests covering validation and edge cases.
+
+### Testing
+
+Run the automated test suite:
+
+```powershell
+python -m pytest -v
+```
+
+Latest result: **12 tests passed**.
+
+### Technologies Used
+
+- Python and Pandas
+- PostgreSQL and SQL
+- pytest
+- CSV and Parquet
+- Git and GitHub
+
