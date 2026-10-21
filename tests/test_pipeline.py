@@ -1,6 +1,7 @@
 
 import unittest
 import pandas as pd
+import pytest
 
 from main import validate_orders, check_data_quality
 
@@ -41,15 +42,11 @@ class TestOrderPipeline(unittest.TestCase):
         row = rejected.loc[
             rejected["order_id"] == 2
         ].iloc[0]
+
         self.assertIn(
-            "Missing customer name", row["rejection_reason"]
+            "Missing customer name",
+            row["rejection_reason"],
         )
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 
 
 def test_data_quality_valid_summary():
@@ -63,8 +60,6 @@ def test_data_quality_valid_summary():
 
 
 def test_data_quality_rejects_inconsistent_counts():
-    import pytest
-
     with pytest.raises(ValueError, match="Input count"):
         check_data_quality(
             input_count=100,
@@ -76,8 +71,6 @@ def test_data_quality_rejects_inconsistent_counts():
 
 
 def test_data_quality_rejects_negative_counts():
-    import pytest
-
     with pytest.raises(ValueError, match="cannot be negative"):
         check_data_quality(
             input_count=100,
@@ -89,8 +82,6 @@ def test_data_quality_rejects_negative_counts():
 
 
 def test_data_quality_rejects_incorrect_percentages():
-    import pytest
-
     with pytest.raises(ValueError, match="Valid percentage"):
         check_data_quality(
             input_count=100,
@@ -99,3 +90,84 @@ def test_data_quality_rejects_incorrect_percentages():
             valid_percentage=70.0,
             rejected_percentage=30.0,
         )
+
+
+def test_missing_required_column_is_rejected():
+    orders = pd.DataFrame({
+        "order_id": ["ORD001"],
+        "customer_name": ["Alice"],
+        "product": ["Laptop"],
+        "category": ["Electronics"],
+        "quantity": [1],
+        # The required price column is missing.
+    })
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        validate_orders(orders)
+
+
+def test_duplicate_order_id_across_chunks_is_rejected():
+    first_chunk = pd.DataFrame({
+        "order_id": ["ORD001"],
+        "customer_name": ["Alice"],
+        "product": ["Laptop"],
+        "category": ["Electronics"],
+        "quantity": [1],
+        "price": [50000],
+    })
+
+    second_chunk = pd.DataFrame({
+        "order_id": ["ORD001"],
+        "customer_name": ["Bob"],
+        "product": ["Phone"],
+        "category": ["Electronics"],
+        "quantity": [2],
+        "price": [20000],
+    })
+
+    seen_order_ids = set()
+
+    cleaned_first, rejected_first = validate_orders(
+        first_chunk,
+        seen_order_ids=seen_order_ids,
+    )
+
+    cleaned_second, rejected_second = validate_orders(
+        second_chunk,
+        seen_order_ids=seen_order_ids,
+    )
+
+    assert len(cleaned_first) == 1
+    assert len(rejected_first) == 0
+
+    assert len(cleaned_second) == 0
+    assert len(rejected_second) == 1
+
+    assert (
+        "Duplicate order ID"
+        in rejected_second.iloc[0]["rejection_reason"]
+    )
+
+
+
+def test_empty_orders_dataframe():
+    columns = [
+        "order_id",
+        "customer_name",
+        "product",
+        "category",
+        "quantity",
+        "price",
+    ]
+
+    empty_orders = pd.DataFrame(columns=columns)
+
+    cleaned, rejected = validate_orders(empty_orders)
+
+    assert cleaned.empty
+    assert rejected.empty
+    assert "total_amount" in cleaned.columns
+    assert "rejection_reason" in rejected.columns
+
+if __name__ == "__main__":
+    unittest.main()
