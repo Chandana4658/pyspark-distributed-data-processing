@@ -1,3 +1,13 @@
 
+# Python virtual environment
+.venv/
+
+# Python cache files
 __pycache__/
 *.pyc
+
+# Generated benchmark data
+data/orders_large.csv
+
+# Generated pipeline outputs
+output/
