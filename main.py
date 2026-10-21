@@ -3,23 +3,15 @@ from pathlib import Path
 import pandas as pd
 
 
-def main():
-    project_dir = Path(__file__).resolve().parent
-    input_file = project_dir / "data" / "orders.csv"
-    output_dir = project_dir / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
+def validate_orders(orders):
+    """Clean, validate, and separate valid and rejected orders."""
+    orders = orders.copy()
 
-    # 1. Read raw data
-    orders = pd.read_csv(input_file)
-    input_count = len(orders)
-
-    print("\n--- RAW DATA ---")
-    print(orders.to_string(index=False))
-
-    # 2. Clean text fields and numeric values
+    # 1. Clean text fields
     for column in ["customer_name", "product", "category"]:
         orders[column] = orders[column].astype("string").str.strip()
 
+    # 2. Convert numeric columns
     orders["quantity"] = pd.to_numeric(
         orders["quantity"], errors="coerce"
     )
@@ -27,33 +19,26 @@ def main():
         orders["price"], errors="coerce"
     )
 
-    # 3. Validate every record and capture rejection reasons
+    # 3. Validate records and record rejection reasons
     rejection_reasons = []
-
     seen_order_ids = set()
 
     for _, row in orders.iterrows():
         reasons = []
-
         order_id = row["order_id"]
 
         if pd.isna(order_id):
             reasons.append("Missing order ID")
+        elif order_id in seen_order_ids:
+            reasons.append("Duplicate order ID")
         else:
-            # Treat repeated order IDs after the first as duplicates.
-            if order_id in seen_order_ids:
-                reasons.append("Duplicate order ID")
-            else:
-                seen_order_ids.add(order_id)
+            seen_order_ids.add(order_id)
 
-        if pd.isna(row["customer_name"]) or row["customer_name"] == "":
-            reasons.append("Missing customer name")
-
-        if pd.isna(row["product"]) or row["product"] == "":
-            reasons.append("Missing product")
-
-        if pd.isna(row["category"]) or row["category"] == "":
-            reasons.append("Missing category")
+        for column in ["customer_name", "product", "category"]:
+            if pd.isna(row[column]) or row[column] == "":
+                reasons.append(
+                    f"Missing {column.replace('_', ' ')}"
+                )
 
         if pd.isna(row["quantity"]):
             reasons.append("Missing or invalid quantity")
@@ -69,7 +54,7 @@ def main():
 
     orders["rejection_reason"] = rejection_reasons
 
-    # 4. Split valid and rejected records
+    # 4. Separate valid and rejected records
     rejected = orders.loc[
         orders["rejection_reason"] != ""
     ].copy()
@@ -78,7 +63,29 @@ def main():
         orders["rejection_reason"] == ""
     ].drop(columns=["rejection_reason"]).copy()
 
-    rejected_count = len(rejected)
+    # 5. Calculate order amount
+    cleaned["total_amount"] = (
+        cleaned["quantity"] * cleaned["price"]
+    ).round(2)
+
+    return cleaned, rejected
+
+
+def main():
+    project_dir = Path(__file__).resolve().parent
+    input_file = project_dir / "data" / "orders.csv"
+    output_dir = project_dir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Read raw data
+    orders = pd.read_csv(input_file)
+    input_count = len(orders)
+
+    print("\n--- RAW DATA ---")
+    print(orders.to_string(index=False))
+
+    # 2. Validate, clean, and transform
+    cleaned, rejected = validate_orders(orders)
 
     print("\n--- REJECTED RECORDS ---")
     if rejected.empty:
@@ -86,15 +93,10 @@ def main():
     else:
         print(rejected.to_string(index=False))
 
-    # 5. Transform valid records
-    cleaned["total_amount"] = (
-        cleaned["quantity"] * cleaned["price"]
-    ).round(2)
-
     print("\n--- CLEANED DATA ---")
     print(cleaned.to_string(index=False))
 
-    # 6. Generate category-wise report
+    # 3. Generate category-wise sales report
     category_report = (
         cleaned.groupby("category", as_index=False)
         .agg(
@@ -105,7 +107,7 @@ def main():
         .sort_values("total_revenue", ascending=False)
     )
 
-    # 7. Generate product-wise report
+    # 4. Generate product-wise sales report
     product_report = (
         cleaned.groupby("product", as_index=False)
         .agg(
@@ -115,8 +117,10 @@ def main():
         .sort_values("total_revenue", ascending=False)
     )
 
-    # 8. Save processed data and quality reports
-    cleaned.to_csv(output_dir / "cleaned_orders.csv", index=False)
+    # 5. Save output files
+    cleaned.to_csv(
+        output_dir / "cleaned_orders.csv", index=False
+    )
 
     category_report.to_csv(
         output_dir / "category_report.csv", index=False
@@ -134,17 +138,17 @@ def main():
         output_dir / "cleaned_orders.parquet", index=False
     )
 
-    # 9. Print data quality summary
+    # 6. Print processing summary
     print("\n--- DATA QUALITY SUMMARY ---")
     print(f"Input records: {input_count}")
     print(f"Valid records: {len(cleaned)}")
-    print(f"Rejected records: {rejected_count}")
+    print(f"Rejected records: {len(rejected)}")
 
     if input_count:
         valid_percentage = len(cleaned) / input_count * 100
         print(f"Valid data percentage: {valid_percentage:.2f}%")
 
-    print(f"Quality report: {output_dir / 'rejected_records.csv'}")
+    print(f"Output directory: {output_dir}")
     print("\nProcessing completed successfully!")
 
 
