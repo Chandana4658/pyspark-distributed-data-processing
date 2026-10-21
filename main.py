@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import os
 import time
 
 import pandas as pd
@@ -11,7 +12,6 @@ def validate_orders(orders, seen_order_ids=None):
     """Clean, validate, and separate valid and rejected orders."""
     orders = orders.copy()
 
-    # Keep duplicate tracking across chunks when a set is provided.
     if seen_order_ids is None:
         seen_order_ids = set()
 
@@ -29,7 +29,7 @@ def validate_orders(orders, seen_order_ids=None):
         orders["price"], errors="coerce"
     )
 
-    # 3. Validate records and record rejection reasons
+    # 3. Validate records
     rejection_reasons = []
 
     for _, row in orders.iterrows():
@@ -82,11 +82,24 @@ def validate_orders(orders, seen_order_ids=None):
 
 def main():
     project_dir = Path(__file__).resolve().parent
-    input_file = project_dir / "data" / "orders.csv"
+
+    # Use orders_large.csv for benchmarking.
+    input_file = project_dir / "data" / "orders_large.csv"
+
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    chunk_size = 1000
+    # Set chunk size using the CHUNK_SIZE environment variable.
+    chunk_size = int(os.getenv("CHUNK_SIZE", "5000"))
+
+    if chunk_size <= 0:
+        raise ValueError("CHUNK_SIZE must be greater than zero.")
+
+    if not input_file.exists():
+        raise FileNotFoundError(
+            f"Input file not found: {input_file}"
+        )
+
     start_time = time.perf_counter()
 
     cleaned_csv = output_dir / "cleaned_orders.csv"
@@ -95,7 +108,7 @@ def main():
     category_file = output_dir / "category_report.csv"
     product_file = output_dir / "product_report.csv"
 
-    # Remove old outputs to prevent stale data.
+    # Remove previous output files.
     for file in [
         cleaned_csv,
         rejected_csv,
@@ -106,7 +119,6 @@ def main():
         if file.exists():
             file.unlink()
 
-    # Processing state
     seen_order_ids = set()
     category_parts = []
     product_parts = []
@@ -118,7 +130,7 @@ def main():
     parquet_writer = None
 
     try:
-        # 1. Read and process the CSV in chunks.
+        # 1. Read and process CSV in chunks.
         for chunk_number, orders in enumerate(
             pd.read_csv(input_file, chunksize=chunk_size),
             start=1,
@@ -148,7 +160,7 @@ def main():
                 index=False,
             )
 
-            # 3. Write valid records to one Parquet file.
+            # 3. Write valid rows to a single Parquet file.
             if not cleaned.empty:
                 table = pa.Table.from_pandas(
                     cleaned,
@@ -163,7 +175,7 @@ def main():
 
                 parquet_writer.write_table(table)
 
-                # 4. Aggregate report data for this chunk.
+                # 4. Aggregate reports for this chunk.
                 category_parts.append(
                     cleaned.groupby("category", as_index=False)
                     .agg(
@@ -196,7 +208,7 @@ def main():
             cleaned.to_csv(cleaned_csv, index=False)
             rejected.to_csv(rejected_csv, index=False)
 
-        # 6. Combine category reports across all chunks.
+        # 6. Combine category reports across chunks.
         if category_parts:
             category_report = (
                 pd.concat(category_parts, ignore_index=True)
@@ -220,7 +232,7 @@ def main():
                 ]
             )
 
-        # 7. Combine product reports across all chunks.
+        # 7. Combine product reports across chunks.
         if product_parts:
             product_report = (
                 pd.concat(product_parts, ignore_index=True)
@@ -250,7 +262,7 @@ def main():
         if parquet_writer is not None:
             parquet_writer.close()
 
-    # 9. Print processing summary.
+    # 9. Print data quality and performance summary.
     elapsed_time = time.perf_counter() - start_time
 
     print("\n--- DATA QUALITY SUMMARY ---")
@@ -258,7 +270,7 @@ def main():
     print(f"Valid records: {valid_count}")
     print(f"Rejected records: {rejected_count}")
 
-    if input_count > 0:
+    if input_count:
         valid_percentage = valid_count / input_count * 100
         print(f"Valid data percentage: {valid_percentage:.2f}%")
 
