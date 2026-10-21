@@ -2,7 +2,7 @@
 import unittest
 import pandas as pd
 
-from main import validate_orders
+from main import validate_orders, check_data_quality
 
 
 class TestOrderPipeline(unittest.TestCase):
@@ -48,3 +48,54 @@ class TestOrderPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+
+def test_data_quality_valid_summary():
+    assert check_data_quality(
+        input_count=100000,
+        valid_count=99867,
+        rejected_count=133,
+        valid_percentage=99.867,
+        rejected_percentage=0.133,
+    )
+
+
+def test_data_quality_rejects_inconsistent_counts():
+    import pytest
+
+    with pytest.raises(ValueError, match="Input count"):
+        check_data_quality(
+            input_count=100,
+            valid_count=80,
+            rejected_count=10,
+            valid_percentage=80.0,
+            rejected_percentage=10.0,
+        )
+
+
+def test_data_quality_rejects_negative_counts():
+    import pytest
+
+    with pytest.raises(ValueError, match="cannot be negative"):
+        check_data_quality(
+            input_count=100,
+            valid_count=-10,
+            rejected_count=110,
+            valid_percentage=0.0,
+            rejected_percentage=100.0,
+        )
+
+
+def test_data_quality_rejects_incorrect_percentages():
+    import pytest
+
+    with pytest.raises(ValueError, match="Valid percentage"):
+        check_data_quality(
+            input_count=100,
+            valid_count=80,
+            rejected_count=20,
+            valid_percentage=70.0,
+            rejected_percentage=30.0,
+        )

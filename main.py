@@ -17,6 +17,58 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def check_data_quality(
+    input_count,
+    valid_count,
+    rejected_count,
+    valid_percentage,
+    rejected_percentage,
+):
+    """Validate data-quality counts and percentages."""
+
+    counts = (input_count, valid_count, rejected_count)
+
+    if any(count < 0 for count in counts):
+        raise ValueError("Record counts cannot be negative.")
+
+    if input_count != valid_count + rejected_count:
+        raise ValueError(
+            "Input count must equal valid count plus rejected count."
+        )
+
+    expected_valid = (
+        valid_count / input_count * 100 if input_count else 0.0
+    )
+    expected_rejected = (
+        rejected_count / input_count * 100 if input_count else 0.0
+    )
+
+    if not (
+        0 <= valid_percentage <= 100
+        and 0 <= rejected_percentage <= 100
+    ):
+        raise ValueError("Percentages must be between 0 and 100.")
+
+    if abs(valid_percentage - expected_valid) > 0.01:
+        raise ValueError(
+            "Valid percentage does not match record counts."
+        )
+
+    if abs(rejected_percentage - expected_rejected) > 0.01:
+        raise ValueError(
+            "Rejected percentage does not match record counts."
+        )
+
+    if input_count and abs(
+        valid_percentage + rejected_percentage - 100
+    ) > 0.02:
+        raise ValueError(
+            "Valid and rejected percentages must total 100%."
+        )
+
+    return True
+
+
 def validate_orders(orders, seen_order_ids=None):
     """Clean, validate, and separate valid and rejected orders."""
     orders = orders.copy()
@@ -24,11 +76,31 @@ def validate_orders(orders, seen_order_ids=None):
     if seen_order_ids is None:
         seen_order_ids = set()
 
-    # 1. Clean text fields
+    # Check required columns
+    required_columns = [
+        "order_id",
+        "customer_name",
+        "product",
+        "category",
+        "quantity",
+        "price",
+    ]
+
+    missing_columns = [
+        column for column in required_columns
+        if column not in orders.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Input data is missing required columns: {missing_columns}"
+        )
+
+    # Clean text fields
     for column in ["customer_name", "product", "category"]:
         orders[column] = orders[column].astype("string").str.strip()
 
-    # 2. Convert numeric columns
+    # Convert numeric columns
     orders["quantity"] = pd.to_numeric(
         orders["quantity"], errors="coerce"
     )
@@ -36,14 +108,16 @@ def validate_orders(orders, seen_order_ids=None):
         orders["price"], errors="coerce"
     )
 
-    # 3. Validate records
+    # Validate records
     rejection_reasons = []
 
     for _, row in orders.iterrows():
         reasons = []
         order_id = row["order_id"]
 
-        if pd.isna(order_id):
+        if pd.isna(order_id) or (
+            isinstance(order_id, str) and not order_id.strip()
+        ):
             reasons.append("Missing order ID")
         elif order_id in seen_order_ids:
             reasons.append("Duplicate order ID")
@@ -70,7 +144,7 @@ def validate_orders(orders, seen_order_ids=None):
 
     orders["rejection_reason"] = rejection_reasons
 
-    # 4. Separate valid and rejected records
+    # Separate valid and rejected records
     rejected = orders.loc[
         orders["rejection_reason"] != ""
     ].copy()
@@ -79,7 +153,7 @@ def validate_orders(orders, seen_order_ids=None):
         orders["rejection_reason"] == ""
     ].drop(columns=["rejection_reason"]).copy()
 
-    # 5. Calculate order amount
+    # Calculate order amount
     cleaned["total_amount"] = (
         cleaned["quantity"] * cleaned["price"]
     ).round(2)
@@ -94,7 +168,7 @@ def main():
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Configure chunk size through the environment
+    # Configure chunk size
     try:
         chunk_size = int(os.getenv("CHUNK_SIZE", "5000"))
     except ValueError as exc:
@@ -162,7 +236,7 @@ def main():
             valid_count += len(cleaned)
             rejected_count += len(rejected)
 
-            # 2. Append valid and rejected records to CSV files
+            # 2. Save cleaned and rejected CSV records
             cleaned.to_csv(
                 cleaned_csv,
                 mode="w" if first_chunk else "a",
@@ -177,7 +251,7 @@ def main():
                 index=False,
             )
 
-            # 3. Write valid records to one Parquet file
+            # 3. Write valid records to Parquet
             if not cleaned.empty:
                 table = pa.Table.from_pandas(
                     cleaned,
@@ -192,7 +266,7 @@ def main():
 
                 parquet_writer.write_table(table)
 
-                # 4. Aggregate category report for this chunk
+                # 4. Aggregate category metrics
                 category_parts.append(
                     cleaned.groupby("category", as_index=False)
                     .agg(
@@ -202,7 +276,7 @@ def main():
                     )
                 )
 
-                # 5. Aggregate product report for this chunk
+                # 5. Aggregate product metrics
                 product_parts.append(
                     cleaned.groupby("product", as_index=False)
                     .agg(
@@ -213,7 +287,6 @@ def main():
 
             first_chunk = False
 
-            # Log processing progress
             logger.info(
                 "Processed chunk %s: %s input rows, "
                 "%s valid, %s rejected",
@@ -223,7 +296,7 @@ def main():
                 len(rejected),
             )
 
-        # 6. Handle a CSV containing headers only
+        # Handle an empty CSV containing headers only
         if first_chunk:
             empty_orders = pd.read_csv(input_file, nrows=0)
             cleaned, rejected = validate_orders(empty_orders)
@@ -231,7 +304,7 @@ def main():
             cleaned.to_csv(cleaned_csv, index=False)
             rejected.to_csv(rejected_csv, index=False)
 
-        # 7. Combine category reports across chunks
+        # 6. Combine category reports
         if category_parts:
             category_report = (
                 pd.concat(category_parts, ignore_index=True)
@@ -241,9 +314,7 @@ def main():
                     total_revenue=("total_revenue", "sum"),
                     total_orders=("total_orders", "sum"),
                 )
-                .sort_values(
-                    "total_revenue", ascending=False
-                )
+                .sort_values("total_revenue", ascending=False)
             )
         else:
             category_report = pd.DataFrame(
@@ -255,7 +326,7 @@ def main():
                 ]
             )
 
-        # 8. Combine product reports across chunks
+        # 7. Combine product reports
         if product_parts:
             product_report = (
                 pd.concat(product_parts, ignore_index=True)
@@ -264,9 +335,7 @@ def main():
                     total_quantity=("total_quantity", "sum"),
                     total_revenue=("total_revenue", "sum"),
                 )
-                .sort_values(
-                    "total_revenue", ascending=False
-                )
+                .sort_values("total_revenue", ascending=False)
             )
         else:
             product_report = pd.DataFrame(
@@ -277,7 +346,7 @@ def main():
                 ]
             )
 
-        # 9. Save final business reports
+        # 8. Save business reports
         category_report.to_csv(category_file, index=False)
         product_report.to_csv(product_file, index=False)
 
@@ -289,22 +358,28 @@ def main():
         if parquet_writer is not None:
             parquet_writer.close()
 
-    # 10. Calculate data quality and execution time
+    # 9. Calculate data quality and execution time
     elapsed_time = time.perf_counter() - start_time
 
     valid_percentage = (
-        valid_count / input_count * 100
-        if input_count
-        else 0.0
+        valid_count / input_count * 100 if input_count else 0.0
     )
-
     rejected_percentage = (
-        rejected_count / input_count * 100
-        if input_count
-        else 0.0
+        rejected_count / input_count * 100 if input_count else 0.0
     )
 
-    # 11. Create the data-quality summary report
+    # 10. Automatically validate data-quality metrics
+    check_data_quality(
+        input_count=input_count,
+        valid_count=valid_count,
+        rejected_count=rejected_count,
+        valid_percentage=valid_percentage,
+        rejected_percentage=rejected_percentage,
+    )
+
+    logger.info("All data-quality checks passed")
+
+    # 11. Save the data-quality summary
     quality_report = pd.DataFrame(
         [
             {
@@ -321,13 +396,13 @@ def main():
 
     quality_report.to_csv(quality_file, index=False)
 
-    # 12. Log data quality and performance summary
+    # 12. Log final summary
     logger.info("----- DATA QUALITY SUMMARY -----")
     logger.info("Input records: %s", input_count)
     logger.info("Valid records: %s", valid_count)
     logger.info("Rejected records: %s", rejected_count)
-    logger.info("Valid data percentage: %.2f%%", valid_percentage)
-    logger.info("Rejected data percentage: %.2f%%", rejected_percentage)
+    logger.info("Valid percentage: %.2f%%", valid_percentage)
+    logger.info("Rejected percentage: %.2f%%", rejected_percentage)
     logger.info("Chunk size: %s", chunk_size)
     logger.info("Execution time: %.4f seconds", elapsed_time)
     logger.info("Data-quality report saved to: %s", quality_file)
