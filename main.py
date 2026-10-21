@@ -1,15 +1,25 @@
 
 from pathlib import Path
+import time
+
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
-def validate_orders(orders):
+def validate_orders(orders, seen_order_ids=None):
     """Clean, validate, and separate valid and rejected orders."""
     orders = orders.copy()
 
+    # Keep duplicate tracking across chunks when a set is provided.
+    if seen_order_ids is None:
+        seen_order_ids = set()
+
     # 1. Clean text fields
     for column in ["customer_name", "product", "category"]:
-        orders[column] = orders[column].astype("string").str.strip()
+        orders[column] = (
+            orders[column].astype("string").str.strip()
+        )
 
     # 2. Convert numeric columns
     orders["quantity"] = pd.to_numeric(
@@ -21,7 +31,6 @@ def validate_orders(orders):
 
     # 3. Validate records and record rejection reasons
     rejection_reasons = []
-    seen_order_ids = set()
 
     for _, row in orders.iterrows():
         reasons = []
@@ -77,77 +86,184 @@ def main():
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Read raw data
-    orders = pd.read_csv(input_file)
-    input_count = len(orders)
+    chunk_size = 1000
+    start_time = time.perf_counter()
 
-    print("\n--- RAW DATA ---")
-    print(orders.to_string(index=False))
+    cleaned_csv = output_dir / "cleaned_orders.csv"
+    rejected_csv = output_dir / "rejected_records.csv"
+    parquet_file = output_dir / "cleaned_orders.parquet"
+    category_file = output_dir / "category_report.csv"
+    product_file = output_dir / "product_report.csv"
 
-    # 2. Validate, clean, and transform
-    cleaned, rejected = validate_orders(orders)
+    # Remove old outputs to prevent stale data.
+    for file in [
+        cleaned_csv,
+        rejected_csv,
+        parquet_file,
+        category_file,
+        product_file,
+    ]:
+        if file.exists():
+            file.unlink()
 
-    print("\n--- REJECTED RECORDS ---")
-    if rejected.empty:
-        print("No rejected records.")
-    else:
-        print(rejected.to_string(index=False))
+    # Processing state
+    seen_order_ids = set()
+    category_parts = []
+    product_parts = []
 
-    print("\n--- CLEANED DATA ---")
-    print(cleaned.to_string(index=False))
+    input_count = 0
+    valid_count = 0
+    rejected_count = 0
+    first_chunk = True
+    parquet_writer = None
 
-    # 3. Generate category-wise sales report
-    category_report = (
-        cleaned.groupby("category", as_index=False)
-        .agg(
-            total_items=("quantity", "sum"),
-            total_revenue=("total_amount", "sum"),
-            total_orders=("order_id", "nunique"),
-        )
-        .sort_values("total_revenue", ascending=False)
-    )
+    try:
+        # 1. Read and process the CSV in chunks.
+        for chunk_number, orders in enumerate(
+            pd.read_csv(input_file, chunksize=chunk_size),
+            start=1,
+        ):
+            input_count += len(orders)
 
-    # 4. Generate product-wise sales report
-    product_report = (
-        cleaned.groupby("product", as_index=False)
-        .agg(
-            total_quantity=("quantity", "sum"),
-            total_revenue=("total_amount", "sum"),
-        )
-        .sort_values("total_revenue", ascending=False)
-    )
+            cleaned, rejected = validate_orders(
+                orders,
+                seen_order_ids=seen_order_ids,
+            )
 
-    # 5. Save output files
-    cleaned.to_csv(
-        output_dir / "cleaned_orders.csv", index=False
-    )
+            valid_count += len(cleaned)
+            rejected_count += len(rejected)
 
-    category_report.to_csv(
-        output_dir / "category_report.csv", index=False
-    )
+            # 2. Append valid and rejected records to CSV files.
+            cleaned.to_csv(
+                cleaned_csv,
+                mode="w" if first_chunk else "a",
+                header=first_chunk,
+                index=False,
+            )
 
-    product_report.to_csv(
-        output_dir / "product_report.csv", index=False
-    )
+            rejected.to_csv(
+                rejected_csv,
+                mode="w" if first_chunk else "a",
+                header=first_chunk,
+                index=False,
+            )
 
-    rejected.to_csv(
-        output_dir / "rejected_records.csv", index=False
-    )
+            # 3. Write valid records to one Parquet file.
+            if not cleaned.empty:
+                table = pa.Table.from_pandas(
+                    cleaned,
+                    preserve_index=False,
+                )
 
-    cleaned.to_parquet(
-        output_dir / "cleaned_orders.parquet", index=False
-    )
+                if parquet_writer is None:
+                    parquet_writer = pq.ParquetWriter(
+                        parquet_file,
+                        table.schema,
+                    )
 
-    # 6. Print processing summary
+                parquet_writer.write_table(table)
+
+                # 4. Aggregate report data for this chunk.
+                category_parts.append(
+                    cleaned.groupby("category", as_index=False)
+                    .agg(
+                        total_items=("quantity", "sum"),
+                        total_revenue=("total_amount", "sum"),
+                        total_orders=("order_id", "nunique"),
+                    )
+                )
+
+                product_parts.append(
+                    cleaned.groupby("product", as_index=False)
+                    .agg(
+                        total_quantity=("quantity", "sum"),
+                        total_revenue=("total_amount", "sum"),
+                    )
+                )
+
+            first_chunk = False
+
+            print(
+                f"Processed chunk {chunk_number}: "
+                f"{len(orders)} input rows"
+            )
+
+        # 5. Handle an empty CSV containing headers only.
+        if first_chunk:
+            empty_orders = pd.read_csv(input_file, nrows=0)
+            cleaned, rejected = validate_orders(empty_orders)
+
+            cleaned.to_csv(cleaned_csv, index=False)
+            rejected.to_csv(rejected_csv, index=False)
+
+        # 6. Combine category reports across all chunks.
+        if category_parts:
+            category_report = (
+                pd.concat(category_parts, ignore_index=True)
+                .groupby("category", as_index=False)
+                .agg(
+                    total_items=("total_items", "sum"),
+                    total_revenue=("total_revenue", "sum"),
+                    total_orders=("total_orders", "sum"),
+                )
+                .sort_values(
+                    "total_revenue", ascending=False
+                )
+            )
+        else:
+            category_report = pd.DataFrame(
+                columns=[
+                    "category",
+                    "total_items",
+                    "total_revenue",
+                    "total_orders",
+                ]
+            )
+
+        # 7. Combine product reports across all chunks.
+        if product_parts:
+            product_report = (
+                pd.concat(product_parts, ignore_index=True)
+                .groupby("product", as_index=False)
+                .agg(
+                    total_quantity=("total_quantity", "sum"),
+                    total_revenue=("total_revenue", "sum"),
+                )
+                .sort_values(
+                    "total_revenue", ascending=False
+                )
+            )
+        else:
+            product_report = pd.DataFrame(
+                columns=[
+                    "product",
+                    "total_quantity",
+                    "total_revenue",
+                ]
+            )
+
+        # 8. Save final reports.
+        category_report.to_csv(category_file, index=False)
+        product_report.to_csv(product_file, index=False)
+
+    finally:
+        if parquet_writer is not None:
+            parquet_writer.close()
+
+    # 9. Print processing summary.
+    elapsed_time = time.perf_counter() - start_time
+
     print("\n--- DATA QUALITY SUMMARY ---")
     print(f"Input records: {input_count}")
-    print(f"Valid records: {len(cleaned)}")
-    print(f"Rejected records: {len(rejected)}")
+    print(f"Valid records: {valid_count}")
+    print(f"Rejected records: {rejected_count}")
 
-    if input_count:
-        valid_percentage = len(cleaned) / input_count * 100
+    if input_count > 0:
+        valid_percentage = valid_count / input_count * 100
         print(f"Valid data percentage: {valid_percentage:.2f}%")
 
+    print(f"Chunk size: {chunk_size}")
+    print(f"Execution time: {elapsed_time:.4f} seconds")
     print(f"Output directory: {output_dir}")
     print("\nProcessing completed successfully!")
 
