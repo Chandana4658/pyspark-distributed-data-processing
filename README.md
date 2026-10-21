@@ -1,122 +1,43 @@
-# Pandas-Based Data Processing Pipeline
+## Benchmark Results
 
-A Python data-processing project that processes large CSV datasets in chunks, validates order records, separates invalid records, and generates reports.
+The pipeline was benchmarked using 100,000 input records and three chunk sizes.
 
-## Project Overview
+| Chunk Size | Execution Time (seconds) | Cleaned Records | Rejected Records |
+|---:|---:|---:|---:|
+| 500 | 10.7582 | 99,867 | 133 |
+| 1,000 | 8.5821 | 99,867 | 133 |
+| 5,000 | 7.2042 | 99,867 | 133 |
 
-This project processes 100,000 order records using Pandas. It uses chunk-based processing to reduce memory usage and produces cleaned datasets, rejected records, and business reports.
+The chunk size of 5,000 was the fastest in this benchmark run. All three configurations produced the same cleaned and rejected record counts.
 
-## Features
+Execution times may vary depending on system resources and workload.
 
-- Read large CSV files in configurable chunks.
-- Validate order records and reject invalid data.
-- Track duplicate order IDs across chunks.
-- Calculate order totals and revenue.
-- Export cleaned data to CSV and Parquet formats.
-- Generate category and product revenue reports.
-- Measure processing time and data quality.
-- Test data validation and revenue calculations using pytest.
-
-## Technologies Used
-
-- Python
-- Pandas
-- PyArrow
-- pytest
-- Git and GitHub
-
-## Project Structure
-
-```text
-pyspark-distributed-data-processing/
-├── data/
-│   ├── orders.csv
-│   └── orders_large.csv
-├── output/
-│   ├── cleaned_orders.csv
-│   ├── cleaned_orders.parquet
-│   ├── rejected_records.csv
-│   ├── category_report.csv
-│   └── product_report.csv
-├── tests/
-│   └── test_pipeline.py
-├── generate_large_data.py
-├── main.py
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-
-## Setup and Installation
-
-Create and activate a virtual environment, then install the project dependencies.
+Run the benchmark again with:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
+python benchmark.py
 
-## Generate the Dataset
+
+
+
+## Benchmark Results
+
+The data-processing pipeline was tested with 100,000 input records using different chunk sizes.
+
+| Chunk Size | Execution Time (seconds) | Cleaned Records | Rejected Records |
+|---:|---:|---:|---:|
+| 500 | 10.7582 | 99,867 | 133 |
+| 1,000 | 8.5821 | 99,867 | 133 |
+| 5,000 | 7.2042 | 99,867 | 133 |
+
+In this benchmark run, a chunk size of 5,000 produced the fastest result. All three runs produced the same number of cleaned and rejected records.
+
+Execution times may vary depending on system resources and workload.
+
+### Run the Benchmark
 
 ```powershell
-python generate_large_data.py
+python benchmark.py
 ```
 
-## Run the Pipeline
-
-```powershell
-python main.py
-```
-
-The pipeline processes the input data and saves the generated files in the `output/` directory.
-
-## Run Tests
-
-```powershell
-python -m pytest -v
-```
-
-The current test suite contains five tests covering valid records, missing customer information, negative quantities, rejection reasons, and revenue calculations.
-
-## Performance and Data Quality
-
-Latest successful run with 100,000 input records:
-
-| Metric | Result |
-|---|---:|
-| Input records | 100,000 |
-| Valid records | 99,867 |
-| Rejected records | 133 |
-| Valid data percentage | 99.87% |
-| Chunk size | 5,000 |
-| Execution time | 6.1983 seconds |
-
-The cleaned and rejected CSV files were verified to contain 99,867 and 133 records respectively, accounting for all 100,000 input records.
-
-*Performance may vary depending on hardware and system load.*
-
-## Output Files
-
-| File | Description |
-|---|---|
-| `cleaned_orders.csv` | Validated order records |
-| `cleaned_orders.parquet` | Cleaned records in columnar Parquet format |
-| `rejected_records.csv` | Rejected records and validation details |
-| `category_report.csv` | Item counts, revenue, and order counts by category |
-| `product_report.csv` | Total quantity and revenue by product |
-
-## Key Learning Outcomes
-
-- Processing large CSV files in chunks.
-- Data validation and cleaning with Pandas.
-- Working with CSV and Parquet formats.
-- Generating business reports.
-- Writing automated tests with pytest.
-- Benchmarking a data-processing pipeline.
-
-## Author
-
-Venkata Chandana Netturi
-
-GitHub: https://github.com/Chandana4658/pyspark-distributed-data-processing
+The benchmark results are saved to `output/benchmark_results.csv`.
