@@ -110,11 +110,13 @@ def main():
             f"Input file not found: {input_file}"
         )
 
+    # Output files
     cleaned_csv = output_dir / "cleaned_orders.csv"
     rejected_csv = output_dir / "rejected_records.csv"
     parquet_file = output_dir / "cleaned_orders.parquet"
     category_file = output_dir / "category_report.csv"
     product_file = output_dir / "product_report.csv"
+    quality_file = output_dir / "data_quality_report.csv"
 
     logger.info("Starting order-processing pipeline")
     logger.info("Input file: %s", input_file)
@@ -139,6 +141,7 @@ def main():
         parquet_file,
         category_file,
         product_file,
+        quality_file,
     ]:
         if file.exists():
             file.unlink()
@@ -274,7 +277,7 @@ def main():
                 ]
             )
 
-        # 9. Save final reports
+        # 9. Save final business reports
         category_report.to_csv(category_file, index=False)
         product_report.to_csv(product_file, index=False)
 
@@ -286,21 +289,48 @@ def main():
         if parquet_writer is not None:
             parquet_writer.close()
 
-    # 10. Log data quality and performance summary
+    # 10. Calculate data quality and execution time
     elapsed_time = time.perf_counter() - start_time
+
     valid_percentage = (
         valid_count / input_count * 100
         if input_count
         else 0.0
     )
 
+    rejected_percentage = (
+        rejected_count / input_count * 100
+        if input_count
+        else 0.0
+    )
+
+    # 11. Create the data-quality summary report
+    quality_report = pd.DataFrame(
+        [
+            {
+                "total_input_records": input_count,
+                "valid_records": valid_count,
+                "rejected_records": rejected_count,
+                "valid_percentage": round(valid_percentage, 2),
+                "rejected_percentage": round(rejected_percentage, 2),
+                "chunk_size": chunk_size,
+                "execution_time_seconds": round(elapsed_time, 4),
+            }
+        ]
+    )
+
+    quality_report.to_csv(quality_file, index=False)
+
+    # 12. Log data quality and performance summary
     logger.info("----- DATA QUALITY SUMMARY -----")
     logger.info("Input records: %s", input_count)
     logger.info("Valid records: %s", valid_count)
     logger.info("Rejected records: %s", rejected_count)
     logger.info("Valid data percentage: %.2f%%", valid_percentage)
+    logger.info("Rejected data percentage: %.2f%%", rejected_percentage)
     logger.info("Chunk size: %s", chunk_size)
     logger.info("Execution time: %.4f seconds", elapsed_time)
+    logger.info("Data-quality report saved to: %s", quality_file)
     logger.info("Output directory: %s", output_dir)
     logger.info("Processing completed successfully")
 
