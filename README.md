@@ -144,3 +144,50 @@ These pipeline timings are from a separate run and may differ from benchmark tim
 **Venkata Chandana Netturi**
 
 GitHub: https://github.com/Chandana4658
+
+
+
+## PostgreSQL Integration
+
+Loaded the cleaned order data from `output/cleaned_orders.csv` into a PostgreSQL database named `orders_db`.
+
+### Features
+- Python-to-PostgreSQL integration using `psycopg2`
+- Bulk insertion of cleaned CSV records
+- Duplicate order prevention using `ON CONFLICT`
+- SQL sales reports by category and product
+- Overall sales summary
+
+### Database
+Table: `orders`
+
+Columns:
+- `order_id`
+- `customer_name`
+- `product`
+- `category`
+- `quantity`
+- `price`
+- `total_amount`
+
+### Run the Loader
+
+Set your PostgreSQL password in PowerShell:
+
+```powershell
+$env:PGPASSWORD = Read-Host "Enter PostgreSQL password"
+```
+
+Then run:
+
+```powershell
+python .\load_to_postgres.py
+```
+
+### SQL Reports
+
+See `sql/01_sales_summary.sql` for queries covering:
+- Overall sales summary
+- Category-wise sales
+- Top 10 products by sales
+
